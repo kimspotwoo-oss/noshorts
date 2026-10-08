@@ -31,4 +31,4 @@ flutter test
 flutter run            # 연결된 Android 기기/에뮬레이터에서 실행
 ```
 
-PR마다 GitHub Actions가 디버그 APK를 빌드해 `noshorts-debug-apk` 아티팩트로 올립니다.
+PR마다 GitHub Actions가 디버그 APK를 빌드합니다. 최신 APK는 폰에서 바로 받을 수 있게 [최신 테스트 빌드 릴리스](https://github.com/kimspotwoo-oss/noshorts/releases/tag/debug-latest)에도 올라갑니다.
