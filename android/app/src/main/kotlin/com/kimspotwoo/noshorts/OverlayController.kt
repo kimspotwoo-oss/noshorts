@@ -45,9 +45,11 @@ class OverlayController(private val context: Context) {
         rects.forEachIndexed { i, rect ->
             val params = maskParams(rect)
             if (i < masks.size) {
+                fitIcon(masks[i], rect)
                 windowManager.updateViewLayout(masks[i], params)
             } else {
                 val view = createMaskView()
+                fitIcon(view, rect)
                 windowManager.addView(view, params)
                 masks.add(view)
             }
@@ -57,18 +59,23 @@ class OverlayController(private val context: Context) {
     fun hideMasks() = showMasks(emptyList())
 
     private fun createMaskView() = TextView(context).apply {
-        text = "🚫 숏폼 가림"
+        text = "🚫"
         gravity = Gravity.CENTER
-        setTextColor(Color.argb(200, 255, 255, 255))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        includeFontPadding = false
         background = GradientDrawable().apply {
-            setColor(Color.argb(245, 30, 30, 30))
+            setColor(Color.rgb(30, 30, 30))
             cornerRadius = dp(12f)
         }
         // 터치를 소비해서 아래 버튼이 눌리지 않게 한다.
         setOnClickListener {
             Toast.makeText(context, "NoShorts가 숏폼을 막고 있어요", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** 아이콘 크기를 가림막 크기에 맞춘다. (짧은 변의 40%, 최대 48dp) */
+    private fun fitIcon(view: View, rect: Rect) {
+        val size = minOf(minOf(rect.width(), rect.height()) * 0.4f, dp(48f))
+        (view as TextView).setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
     }
 
     private fun maskParams(rect: Rect) = baseParams(rect.width(), rect.height()).apply {

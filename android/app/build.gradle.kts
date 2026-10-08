@@ -29,6 +29,16 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // 빌드하는 컴퓨터마다 디버그 키가 달라 덮어 설치가 안 되던 문제를 막기 위해 저장소의 키를 쓴다.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

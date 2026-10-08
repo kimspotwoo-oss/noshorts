@@ -24,7 +24,8 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build apk --debug
+      # 빌드 번호를 실행 번호로 올려서 새 APK를 기존 앱 위에 덮어 설치할 수 있게 한다.
+      - run: flutter build apk --debug --build-number=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: noshorts-debug-apk

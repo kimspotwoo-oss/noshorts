@@ -26,6 +26,7 @@ class ShortsBlockerService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val refreshMasks = Runnable { updateMasks() }
     private var lastTargets: List<ShortsDetector.MaskTarget> = emptyList()
+    private var unknownRetries = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -35,12 +36,21 @@ class ShortsBlockerService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !::overlay.isInitialized) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            // 앱 전환은 이 이벤트가 가장 빨리 온다. (packageName 이 비어 있다)
+            when (isTargetInForeground()) {
+                false -> hideAll()
+                true -> scheduleRefresh(0)
+                null -> scheduleRefresh(UNKNOWN_RETRY_MS) // 전환 중이라 아직 알 수 없음
+            }
+            return
+        }
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return // 우리 오버레이에서 나온 이벤트
 
         if (!ShortsDetector.isTarget(pkg)) {
             // 다른 앱이나 홈 화면으로 넘어가면 모두 걷어낸다.
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) hideAll()
+            if (isTargetInForeground() == false) hideAll()
             return
         }
         if (settings.isAllowedNow()) {
@@ -68,13 +78,27 @@ class ShortsBlockerService : AccessibilityService() {
             }
             scrollingUntil = SystemClock.uptimeMillis() + SCROLL_SETTLE_MS
             // 스크롤이 멈추면 화면을 다시 읽어 피드 가림막을 그린다.
-            handler.removeCallbacks(refreshMasks)
-            handler.postDelayed(refreshMasks, SCROLL_SETTLE_MS)
+            scheduleRefresh(SCROLL_SETTLE_MS)
             return
         }
         // 스크롤 중에는 화면 전체를 다시 읽지 않는다. (버벅임의 원인)
         if (isScrolling()) return
         updateMasks()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // 화면 전환 애니메이션이 끝난 뒤 한 번 더 확인해서 남은 가림막을 걷는다.
+            scheduleRefresh(TRANSITION_SETTLE_MS)
+        }
+    }
+
+    private fun scheduleRefresh(delayMs: Long) {
+        handler.removeCallbacks(refreshMasks)
+        handler.postDelayed(refreshMasks, delayMs)
+    }
+
+    /** 지금 맨 앞 화면이 감시 대상 앱인지. 화면 전환 중이라 알 수 없으면 null. */
+    private fun isTargetInForeground(): Boolean? {
+        val pkg = rootInActiveWindow?.packageName?.toString() ?: return null
+        return ShortsDetector.isTarget(pkg)
     }
 
     private fun hideAll() {
@@ -94,9 +118,22 @@ class ShortsBlockerService : AccessibilityService() {
             showMasks(emptyList())
             return
         }
-        val root = rootInActiveWindow ?: return
-        val pkg = root.packageName?.toString()
-        if (pkg == null || !ShortsDetector.isTarget(pkg)) return
+        if (isScrolling()) {
+            // 스크롤이 끝나는 시점에 다시 확인한다.
+            scheduleRefresh(scrollingUntil - SystemClock.uptimeMillis())
+            return
+        }
+        val root = rootInActiveWindow
+        val pkg = root?.packageName?.toString()
+        if (root == null || pkg == null) {
+            if (unknownRetries++ < MAX_UNKNOWN_RETRIES) scheduleRefresh(UNKNOWN_RETRY_MS)
+            return
+        }
+        unknownRetries = 0
+        if (!ShortsDetector.isTarget(pkg)) {
+            hideAll()
+            return
+        }
         showMasks(ShortsDetector.findMaskTargets(pkg, root))
     }
 
@@ -124,5 +161,8 @@ class ShortsBlockerService : AccessibilityService() {
     companion object {
         private const val LEAVE_GRACE_MS = 1000L
         private const val SCROLL_SETTLE_MS = 300L
+        private const val TRANSITION_SETTLE_MS = 400L
+        private const val UNKNOWN_RETRY_MS = 150L
+        private const val MAX_UNKNOWN_RETRIES = 5
     }
 }

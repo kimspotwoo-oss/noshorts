@@ -97,28 +97,27 @@ object ShortsDetector {
         }
 
         // 피드 안의 "Shorts" 제목이면, 썸네일까지 포함하는 묶음 전체를 가린다.
-        val shelf = shelfContainer(node, bounds, screen)
-        if (!shelf.intersect(screen) || shelf.isEmpty) return null
-        return MaskTarget(shelf, MaskKind.FEED_SHELF)
+        val shelf = shelfItem(node) ?: return null
+        // 다른 탭으로 넘어가 숨겨진 화면의 노드도 트리에 남아 있어서, 보이는지 꼭 확인한다.
+        if (!shelf.isVisibleToUser) return null
+        val rect = Rect().also { shelf.getBoundsInScreen(it) }
+        if (!rect.intersect(screen) || rect.isEmpty) return null
+        if (rect.height() > screen.height() * MAX_SHELF_HEIGHT_PERCENT / 100) return null
+        return MaskTarget(rect, MaskKind.FEED_SHELF)
     }
 
     /**
-     * 제목 노드에서 부모로 올라가며, 제목 위치에서 시작하고 화면 높이의 75%를 넘지 않는
-     * 가장 큰 영역을 쇼츠 묶음으로 본다. (그보다 크면 피드 전체 목록이다.)
+     * 제목 노드에서 부모로 올라가다가 세로로 스크롤되는 피드 목록을 만나면,
+     * 그 목록의 바로 아래 항목(= 제목과 썸네일 줄을 담은 쇼츠 묶음)을 돌려준다.
      */
-    private fun shelfContainer(node: AccessibilityNodeInfo, titleBounds: Rect, screen: Rect): Rect {
-        val slack = titleBounds.height() * 2
-        var best = Rect(titleBounds)
-        var current = node.parent
-        val rect = Rect()
-        repeat(8) {
-            val parent = current ?: return best
-            parent.getBoundsInScreen(rect)
-            if (rect.height() > screen.height() * 3 / 4) return best
-            if (rect.top >= titleBounds.top - slack) best = Rect(rect)
-            current = parent.parent
+    private fun shelfItem(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var child = node
+        repeat(MAX_SHELF_DEPTH) {
+            val parent = child.parent ?: return null
+            if (parent.isScrollable) return child
+            child = parent
         }
-        return best
+        return null
     }
 
     private fun clickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -131,4 +130,6 @@ object ShortsDetector {
     }
 
     private const val MAX_NODES = 3000
+    private const val MAX_SHELF_DEPTH = 10
+    private const val MAX_SHELF_HEIGHT_PERCENT = 70
 }
