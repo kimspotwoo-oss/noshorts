@@ -27,7 +27,7 @@ class OverlayController(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
 
     private val masks = mutableListOf<View>()
-    private var maskRects: List<Rect> = emptyList()
+    private var shownMasks: List<Mask> = emptyList()
     private var warningView: View? = null
 
     val isWarningShowing get() = warningView != null
@@ -35,15 +35,22 @@ class OverlayController(private val context: Context) {
     // ---- 가림막 ----
 
     /**
-     * 주어진 영역들 위에 터치를 막는 가림막을 띄운다.
+     * 가림막 하나.
+     * @param blockTouches true면 아래 화면이 눌리지 않는다. false면 보이기만 하고 터치·스크롤은 아래로 통과한다.
+     */
+    data class Mask(val rect: Rect, val blockTouches: Boolean)
+
+    /**
+     * 주어진 영역들 위에 가림막을 띄운다.
      * 창을 지웠다 다시 만들면 깜빡이고 느려서, 이미 있는 창은 위치만 옮긴다.
      */
-    fun showMasks(rects: List<Rect>) {
-        if (rects == maskRects) return
-        maskRects = rects
-        while (masks.size > rects.size) removeSafely(masks.removeAt(masks.lastIndex))
-        rects.forEachIndexed { i, rect ->
-            val params = maskParams(rect)
+    fun showMasks(newMasks: List<Mask>) {
+        if (newMasks == shownMasks) return
+        shownMasks = newMasks
+        while (masks.size > newMasks.size) removeSafely(masks.removeAt(masks.lastIndex))
+        newMasks.forEachIndexed { i, mask ->
+            val rect = mask.rect
+            val params = maskParams(mask)
             if (i < masks.size) {
                 fitIcon(masks[i], rect)
                 windowManager.updateViewLayout(masks[i], params)
@@ -78,7 +85,9 @@ class OverlayController(private val context: Context) {
         (view as TextView).setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
     }
 
-    private fun maskParams(rect: Rect) = baseParams(rect.width(), rect.height()).apply {
+    private fun maskParams(mask: Mask) = baseParams(mask.rect.width(), mask.rect.height()).apply {
+        val rect = mask.rect
+        if (!mask.blockTouches) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         gravity = Gravity.TOP or Gravity.START
         x = rect.left
         y = rect.top

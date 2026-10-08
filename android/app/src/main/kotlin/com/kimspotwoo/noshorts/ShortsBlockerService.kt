@@ -72,13 +72,7 @@ class ShortsBlockerService : AccessibilityService() {
         if (overlay.isWarningShowing) return
 
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            if (!isScrolling()) {
-                // 스크롤이 시작되면 피드 가림막만 걷고, 고정된 하단 버튼 가림막은 그대로 둔다.
-                showMasks(lastTargets.filter { it.kind == ShortsDetector.MaskKind.NAV_BUTTON })
-            }
-            scrollingUntil = SystemClock.uptimeMillis() + SCROLL_SETTLE_MS
-            // 스크롤이 멈추면 화면을 다시 읽어 피드 가림막을 그린다.
-            scheduleRefresh(SCROLL_SETTLE_MS)
+            startScrolling()
             return
         }
         // 스크롤 중에는 화면 전체를 다시 읽지 않는다. (버벅임의 원인)
@@ -110,7 +104,32 @@ class ShortsBlockerService : AccessibilityService() {
 
     private fun showMasks(targets: List<ShortsDetector.MaskTarget>) {
         lastTargets = targets
-        overlay.showMasks(targets.map { it.rect })
+        overlay.showMasks(
+            targets.map { target ->
+                // 피드 가림막은 손가락 스크롤이 통과하게 한다. 그 아래 쇼츠를 누르면 경고 화면이 막아준다.
+                // 경고 화면을 꺼둔 경우에만 피드 가림막도 터치를 막는다.
+                val blockTouches = target.kind == ShortsDetector.MaskKind.NAV_BUTTON || !settings.warningEnabled
+                OverlayController.Mask(target.rect, blockTouches)
+            },
+        )
+    }
+
+    /** 이전에 그린 피드 가림막 위치가 바뀌었으면 화면이 스크롤되는 중이다. */
+    private fun feedMoved(old: List<ShortsDetector.MaskTarget>, new: List<ShortsDetector.MaskTarget>): Boolean {
+        val oldFeed = old.filter { it.kind == ShortsDetector.MaskKind.FEED_SHELF }.map { it.rect }
+        if (oldFeed.isEmpty()) return false
+        val newFeed = new.filter { it.kind == ShortsDetector.MaskKind.FEED_SHELF }.map { it.rect }
+        return oldFeed.toSet() != newFeed.toSet()
+    }
+
+    private fun startScrolling() {
+        if (!isScrolling()) {
+            // 피드 가림막만 걷고, 고정된 하단 버튼 가림막은 그대로 둔다.
+            showMasks(lastTargets.filter { it.kind == ShortsDetector.MaskKind.NAV_BUTTON })
+        }
+        scrollingUntil = SystemClock.uptimeMillis() + SCROLL_SETTLE_MS
+        // 스크롤이 멈추면 화면을 다시 읽어 피드 가림막을 그린다.
+        scheduleRefresh(SCROLL_SETTLE_MS)
     }
 
     private fun updateMasks() {
@@ -134,7 +153,13 @@ class ShortsBlockerService : AccessibilityService() {
             hideAll()
             return
         }
-        showMasks(ShortsDetector.findMaskTargets(pkg, root))
+        val targets = ShortsDetector.findMaskTargets(pkg, root)
+        if (feedMoved(lastTargets, targets)) {
+            // 스크롤 이벤트 없이 가림막 자리가 움직였다 = 스크롤 중. 다른 콘텐츠를 가리지 않게 바로 걷는다.
+            startScrolling()
+            return
+        }
+        showMasks(targets)
     }
 
     private fun showWarning(pkg: String) {
