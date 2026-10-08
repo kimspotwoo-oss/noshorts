@@ -1,6 +1,8 @@
 package com.kimspotwoo.noshorts
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 
@@ -16,6 +18,15 @@ class ShortsBlockerService : AccessibilityService() {
     /** "돌아가기" 직후 화면이 바뀌는 동안 경고가 다시 뜨지 않게 하는 시각. */
     private var suppressUntil = 0L
 
+    /**
+     * 스크롤 중인 동안(마지막 스크롤 이벤트 후 SCROLL_SETTLE_MS까지)은 피드 가림막을 숨긴다.
+     * 스크롤 이벤트는 초당 10번 정도만 와서 가림막이 썸네일을 매끄럽게 따라갈 수 없다.
+     */
+    private var scrollingUntil = 0L
+    private val handler = Handler(Looper.getMainLooper())
+    private val refreshMasks = Runnable { updateMasks() }
+    private var lastTargets: List<ShortsDetector.MaskTarget> = emptyList()
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         settings = BlockerSettings(this)
@@ -29,11 +40,11 @@ class ShortsBlockerService : AccessibilityService() {
 
         if (!ShortsDetector.isTarget(pkg)) {
             // 다른 앱이나 홈 화면으로 넘어가면 모두 걷어낸다.
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) overlay.hideAll()
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) hideAll()
             return
         }
         if (settings.isAllowedNow()) {
-            overlay.hideAll()
+            hideAll()
             return
         }
 
@@ -50,11 +61,43 @@ class ShortsBlockerService : AccessibilityService() {
         }
         if (overlay.isWarningShowing) return
 
-        if (settings.maskEnabled) {
-            overlay.showMasks(ShortsDetector.findEntryBounds(pkg, root))
-        } else {
-            overlay.hideMasks()
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            if (!isScrolling()) {
+                // 스크롤이 시작되면 피드 가림막만 걷고, 고정된 하단 버튼 가림막은 그대로 둔다.
+                showMasks(lastTargets.filter { it.kind == ShortsDetector.MaskKind.NAV_BUTTON })
+            }
+            scrollingUntil = SystemClock.uptimeMillis() + SCROLL_SETTLE_MS
+            // 스크롤이 멈추면 화면을 다시 읽어 피드 가림막을 그린다.
+            handler.removeCallbacks(refreshMasks)
+            handler.postDelayed(refreshMasks, SCROLL_SETTLE_MS)
+            return
         }
+        // 스크롤 중에는 화면 전체를 다시 읽지 않는다. (버벅임의 원인)
+        if (isScrolling()) return
+        updateMasks()
+    }
+
+    private fun hideAll() {
+        lastTargets = emptyList()
+        overlay.hideAll()
+    }
+
+    private fun isScrolling() = SystemClock.uptimeMillis() < scrollingUntil
+
+    private fun showMasks(targets: List<ShortsDetector.MaskTarget>) {
+        lastTargets = targets
+        overlay.showMasks(targets.map { it.rect })
+    }
+
+    private fun updateMasks() {
+        if (!settings.maskEnabled || settings.isAllowedNow() || overlay.isWarningShowing) {
+            showMasks(emptyList())
+            return
+        }
+        val root = rootInActiveWindow ?: return
+        val pkg = root.packageName?.toString()
+        if (pkg == null || !ShortsDetector.isTarget(pkg)) return
+        showMasks(ShortsDetector.findMaskTargets(pkg, root))
     }
 
     private fun showWarning(pkg: String) {
@@ -73,11 +116,13 @@ class ShortsBlockerService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        handler.removeCallbacks(refreshMasks)
         if (::overlay.isInitialized) overlay.hideAll()
         super.onDestroy()
     }
 
     companion object {
         private const val LEAVE_GRACE_MS = 1000L
+        private const val SCROLL_SETTLE_MS = 300L
     }
 }

@@ -49,26 +49,76 @@ object ShortsDetector {
         return rule.entryLabels.any { label.equals(it, ignoreCase = true) }
     }
 
-    /** 화면에 보이는 숏폼 진입 버튼들의 위치. */
-    fun findEntryBounds(packageName: String, root: AccessibilityNodeInfo): List<Rect> {
+    enum class MaskKind {
+        /** 하단 탭 바의 쇼츠/릴스 버튼. 화면에 고정돼 있다. */
+        NAV_BUTTON,
+
+        /** 피드 안의 쇼츠 묶음(제목 + 썸네일). 스크롤하면 움직인다. */
+        FEED_SHELF,
+    }
+
+    data class MaskTarget(val rect: Rect, val kind: MaskKind)
+
+    /** 가림막을 띄울 숏폼 진입 영역들. */
+    fun findMaskTargets(packageName: String, root: AccessibilityNodeInfo): List<MaskTarget> {
         val rule = rules[packageName] ?: return emptyList()
         if (rule.entryLabels.isEmpty()) return emptyList()
-        val result = mutableListOf<Rect>()
+        val screen = Rect().also { root.getBoundsInScreen(it) }
+        if (screen.isEmpty) return emptyList()
+
+        val result = mutableListOf<MaskTarget>()
         val queue = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
         var visited = 0
         while (queue.isNotEmpty() && visited < MAX_NODES) {
             val node = queue.removeFirst()
             visited++
-            if (node.isVisibleToUser && isEntryNode(packageName, node)) {
-                // 라벨이 붙은 노드가 작은 아이콘일 수 있어서, 눌리는 부모까지 올라가 영역을 잡는다.
-                val target = clickableAncestor(node) ?: node
-                val rect = Rect().also { target.getBoundsInScreen(it) }
-                if (!rect.isEmpty && result.none { it == rect }) result.add(rect)
+            if (isEntryNode(packageName, node)) {
+                targetFor(node, screen)?.let { target ->
+                    if (result.none { it.rect == target.rect }) result.add(target)
+                }
                 continue
             }
             for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
         }
         return result
+    }
+
+    private fun targetFor(node: AccessibilityNodeInfo, screen: Rect): MaskTarget? {
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        if (bounds.isEmpty) return null
+
+        // 화면 아래쪽 20% 안에 있는 작은 버튼은 하단 탭 바 버튼으로 본다.
+        val inBottomBar = bounds.top >= screen.bottom - screen.height() / 5
+        if (inBottomBar) {
+            if (!node.isVisibleToUser) return null
+            val target = clickableAncestor(node) ?: node
+            val rect = Rect().also { target.getBoundsInScreen(it) }
+            return if (rect.isEmpty) null else MaskTarget(rect, MaskKind.NAV_BUTTON)
+        }
+
+        // 피드 안의 "Shorts" 제목이면, 썸네일까지 포함하는 묶음 전체를 가린다.
+        val shelf = shelfContainer(node, bounds, screen)
+        if (!shelf.intersect(screen) || shelf.isEmpty) return null
+        return MaskTarget(shelf, MaskKind.FEED_SHELF)
+    }
+
+    /**
+     * 제목 노드에서 부모로 올라가며, 제목 위치에서 시작하고 화면 높이의 75%를 넘지 않는
+     * 가장 큰 영역을 쇼츠 묶음으로 본다. (그보다 크면 피드 전체 목록이다.)
+     */
+    private fun shelfContainer(node: AccessibilityNodeInfo, titleBounds: Rect, screen: Rect): Rect {
+        val slack = titleBounds.height() * 2
+        var best = Rect(titleBounds)
+        var current = node.parent
+        val rect = Rect()
+        repeat(8) {
+            val parent = current ?: return best
+            parent.getBoundsInScreen(rect)
+            if (rect.height() > screen.height() * 3 / 4) return best
+            if (rect.top >= titleBounds.top - slack) best = Rect(rect)
+            current = parent.parent
+        }
+        return best
     }
 
     private fun clickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

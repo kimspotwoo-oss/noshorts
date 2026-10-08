@@ -34,39 +34,47 @@ class OverlayController(private val context: Context) {
 
     // ---- 가림막 ----
 
-    /** 주어진 영역들 위에 터치를 막는 가림막을 띄운다. 영역이 같으면 아무것도 하지 않는다. */
+    /**
+     * 주어진 영역들 위에 터치를 막는 가림막을 띄운다.
+     * 창을 지웠다 다시 만들면 깜빡이고 느려서, 이미 있는 창은 위치만 옮긴다.
+     */
     fun showMasks(rects: List<Rect>) {
         if (rects == maskRects) return
-        hideMasks()
         maskRects = rects
-        for (rect in rects) {
-            val view = TextView(context).apply {
-                text = "🚫"
-                gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                background = GradientDrawable().apply {
-                    setColor(Color.argb(235, 30, 30, 30))
-                    cornerRadius = dp(12f)
-                }
-                // 터치를 소비해서 아래 버튼이 눌리지 않게 한다.
-                setOnClickListener {
-                    Toast.makeText(context, "NoShorts가 숏폼을 막고 있어요", Toast.LENGTH_SHORT).show()
-                }
+        while (masks.size > rects.size) removeSafely(masks.removeAt(masks.lastIndex))
+        rects.forEachIndexed { i, rect ->
+            val params = maskParams(rect)
+            if (i < masks.size) {
+                windowManager.updateViewLayout(masks[i], params)
+            } else {
+                val view = createMaskView()
+                windowManager.addView(view, params)
+                masks.add(view)
             }
-            val params = baseParams(rect.width(), rect.height()).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = rect.left
-                y = rect.top
-            }
-            windowManager.addView(view, params)
-            masks.add(view)
         }
     }
 
-    fun hideMasks() {
-        masks.forEach { removeSafely(it) }
-        masks.clear()
-        maskRects = emptyList()
+    fun hideMasks() = showMasks(emptyList())
+
+    private fun createMaskView() = TextView(context).apply {
+        text = "🚫 숏폼 가림"
+        gravity = Gravity.CENTER
+        setTextColor(Color.argb(200, 255, 255, 255))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        background = GradientDrawable().apply {
+            setColor(Color.argb(245, 30, 30, 30))
+            cornerRadius = dp(12f)
+        }
+        // 터치를 소비해서 아래 버튼이 눌리지 않게 한다.
+        setOnClickListener {
+            Toast.makeText(context, "NoShorts가 숏폼을 막고 있어요", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun maskParams(rect: Rect) = baseParams(rect.width(), rect.height()).apply {
+        gravity = Gravity.TOP or Gravity.START
+        x = rect.left
+        y = rect.top
     }
 
     // ---- 경고 화면 ----
