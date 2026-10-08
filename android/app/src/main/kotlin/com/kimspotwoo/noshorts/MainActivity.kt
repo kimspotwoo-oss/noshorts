@@ -13,6 +13,13 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "isServiceEnabled" -> result.success(isBlockerServiceEnabled())
+                "getSettings" -> result.success(BlockerSettings(this).toMap())
+                "setSettings" -> {
+                    val settings = BlockerSettings(this)
+                    call.argument<Boolean>(BlockerSettings.KEY_MASK)?.let { settings.maskEnabled = it }
+                    call.argument<Boolean>(BlockerSettings.KEY_WARNING)?.let { settings.warningEnabled = it }
+                    result.success(settings.toMap())
+                }
                 "openAccessibilitySettings" -> {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     result.success(null)
