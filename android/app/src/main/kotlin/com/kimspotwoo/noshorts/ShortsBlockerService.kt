@@ -1,0 +1,193 @@
+package com.kimspotwoo.noshorts
+
+import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.accessibility.AccessibilityEvent
+
+/**
+ * 숏폼 화면을 감지해 막는 접근성 서비스.
+ * - 가림막: 쇼츠/릴스 탭 버튼 위에 터치를 막는 오버레이를 띄운다.
+ * - 경고 화면: 숏폼 화면에 들어가거나 진입 버튼을 누르면 화면 전체를 덮는 경고를 띄운다.
+ */
+class ShortsBlockerService : AccessibilityService() {
+    private lateinit var settings: BlockerSettings
+    private lateinit var overlay: OverlayController
+
+    /** "돌아가기" 직후 화면이 바뀌는 동안 경고가 다시 뜨지 않게 하는 시각. */
+    private var suppressUntil = 0L
+
+    /**
+     * 스크롤 중인 동안(마지막 스크롤 이벤트 후 SCROLL_SETTLE_MS까지)은 피드 가림막을 숨긴다.
+     * 스크롤 이벤트는 초당 10번 정도만 와서 가림막이 썸네일을 매끄럽게 따라갈 수 없다.
+     */
+    private var scrollingUntil = 0L
+    private val handler = Handler(Looper.getMainLooper())
+    private val refreshMasks = Runnable { updateMasks() }
+    private var lastTargets: List<ShortsDetector.MaskTarget> = emptyList()
+    private var unknownRetries = 0
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        settings = BlockerSettings(this)
+        overlay = OverlayController(this)
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null || !::overlay.isInitialized) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            // 앱 전환은 이 이벤트가 가장 빨리 온다. (packageName 이 비어 있다)
+            when (isTargetInForeground()) {
+                false -> hideAll()
+                true -> scheduleRefresh(0)
+                null -> scheduleRefresh(UNKNOWN_RETRY_MS) // 전환 중이라 아직 알 수 없음
+            }
+            return
+        }
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName) return // 우리 오버레이에서 나온 이벤트
+
+        if (!ShortsDetector.isTarget(pkg)) {
+            // 다른 앱이나 홈 화면으로 넘어가면 모두 걷어낸다.
+            if (isTargetInForeground() == false) hideAll()
+            return
+        }
+        if (settings.isAllowedNow()) {
+            hideAll()
+            return
+        }
+
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != pkg) return
+
+        if (settings.warningEnabled && SystemClock.uptimeMillis() >= suppressUntil) {
+            val clickedEntry = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED &&
+                event.source?.let { ShortsDetector.isEntryNode(pkg, it) } == true
+            if (clickedEntry || ShortsDetector.isShortsScreen(pkg, root)) {
+                showWarning(pkg)
+                return
+            }
+        }
+        if (overlay.isWarningShowing) return
+
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            startScrolling()
+            return
+        }
+        // 스크롤 중에는 화면 전체를 다시 읽지 않는다. (버벅임의 원인)
+        if (isScrolling()) return
+        updateMasks()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // 화면 전환 애니메이션이 끝난 뒤 한 번 더 확인해서 남은 가림막을 걷는다.
+            scheduleRefresh(TRANSITION_SETTLE_MS)
+        }
+    }
+
+    private fun scheduleRefresh(delayMs: Long) {
+        handler.removeCallbacks(refreshMasks)
+        handler.postDelayed(refreshMasks, delayMs)
+    }
+
+    /** 지금 맨 앞 화면이 감시 대상 앱인지. 화면 전환 중이라 알 수 없으면 null. */
+    private fun isTargetInForeground(): Boolean? {
+        val pkg = rootInActiveWindow?.packageName?.toString() ?: return null
+        return ShortsDetector.isTarget(pkg)
+    }
+
+    private fun hideAll() {
+        lastTargets = emptyList()
+        overlay.hideAll()
+    }
+
+    private fun isScrolling() = SystemClock.uptimeMillis() < scrollingUntil
+
+    private fun showMasks(targets: List<ShortsDetector.MaskTarget>) {
+        lastTargets = targets
+        overlay.showMasks(
+            targets.map { target ->
+                // 피드 가림막은 손가락 스크롤이 통과하게 한다. 그 아래 쇼츠를 누르면 경고 화면이 막아준다.
+                // 경고 화면을 꺼둔 경우에만 피드 가림막도 터치를 막는다.
+                val blockTouches = target.kind == ShortsDetector.MaskKind.NAV_BUTTON || !settings.warningEnabled
+                OverlayController.Mask(target.rect, blockTouches)
+            },
+        )
+    }
+
+    /** 이전에 그린 피드 가림막 위치가 바뀌었으면 화면이 스크롤되는 중이다. */
+    private fun feedMoved(old: List<ShortsDetector.MaskTarget>, new: List<ShortsDetector.MaskTarget>): Boolean {
+        val oldFeed = old.filter { it.kind == ShortsDetector.MaskKind.FEED_SHELF }.map { it.rect }
+        if (oldFeed.isEmpty()) return false
+        val newFeed = new.filter { it.kind == ShortsDetector.MaskKind.FEED_SHELF }.map { it.rect }
+        return oldFeed.toSet() != newFeed.toSet()
+    }
+
+    private fun startScrolling() {
+        if (!isScrolling()) {
+            // 피드 가림막만 걷고, 고정된 하단 버튼 가림막은 그대로 둔다.
+            showMasks(lastTargets.filter { it.kind == ShortsDetector.MaskKind.NAV_BUTTON })
+        }
+        scrollingUntil = SystemClock.uptimeMillis() + SCROLL_SETTLE_MS
+        // 스크롤이 멈추면 화면을 다시 읽어 피드 가림막을 그린다.
+        scheduleRefresh(SCROLL_SETTLE_MS)
+    }
+
+    private fun updateMasks() {
+        if (!settings.maskEnabled || settings.isAllowedNow() || overlay.isWarningShowing) {
+            showMasks(emptyList())
+            return
+        }
+        if (isScrolling()) {
+            // 스크롤이 끝나는 시점에 다시 확인한다.
+            scheduleRefresh(scrollingUntil - SystemClock.uptimeMillis())
+            return
+        }
+        val root = rootInActiveWindow
+        val pkg = root?.packageName?.toString()
+        if (root == null || pkg == null) {
+            if (unknownRetries++ < MAX_UNKNOWN_RETRIES) scheduleRefresh(UNKNOWN_RETRY_MS)
+            return
+        }
+        unknownRetries = 0
+        if (!ShortsDetector.isTarget(pkg)) {
+            hideAll()
+            return
+        }
+        val targets = ShortsDetector.findMaskTargets(pkg, root)
+        if (feedMoved(lastTargets, targets)) {
+            // 스크롤 이벤트 없이 가림막 자리가 움직였다 = 스크롤 중. 다른 콘텐츠를 가리지 않게 바로 걷는다.
+            startScrolling()
+            return
+        }
+        showMasks(targets)
+    }
+
+    private fun showWarning(pkg: String) {
+        overlay.showWarning(
+            onLeave = {
+                suppressUntil = SystemClock.uptimeMillis() + LEAVE_GRACE_MS
+                val wholeApp = ShortsDetector.rules[pkg]?.wholeAppIsShortForm == true
+                performGlobalAction(if (wholeApp) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+            },
+            onAllow = {
+                settings.allowUntil = System.currentTimeMillis() + OverlayController.ALLOW_MINUTES * 60_000L
+            },
+        )
+    }
+
+    override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        handler.removeCallbacks(refreshMasks)
+        if (::overlay.isInitialized) overlay.hideAll()
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val LEAVE_GRACE_MS = 1000L
+        private const val SCROLL_SETTLE_MS = 300L
+        private const val TRANSITION_SETTLE_MS = 400L
+        private const val UNKNOWN_RETRY_MS = 150L
+        private const val MAX_UNKNOWN_RETRIES = 5
+    }
+}

@@ -1,0 +1,16 @@
+gradle-wrapper.jar
+/.gradle
+/captures/
+/gradlew
+/gradlew.bat
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks
+# 테스트 빌드 서명용 디버그 키. 누구나 알아도 되는 키라 커밋한다. (스토어 출시 키는 절대 커밋하지 않는다)
+!app/debug.keystore

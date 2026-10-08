@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_label">NoShorts 숏폼 차단</string>
+    <string name="accessibility_service_description">YouTube 쇼츠, Instagram 릴스, TikTok 화면을 감지해 시청을 막습니다. 화면 내용은 기기 밖으로 전송되지 않습니다.</string>
+</resources>
