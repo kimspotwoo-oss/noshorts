@@ -166,14 +166,39 @@ class ShortsBlockerService : AccessibilityService() {
         overlay.showWarning(
             extraConfirms = settings.extraConfirms,
             onLeave = {
-                suppressUntil = SystemClock.uptimeMillis() + LEAVE_GRACE_MS
                 val wholeApp = ShortsDetector.rules[pkg]?.wholeAppIsShortForm == true
-                performGlobalAction(if (wholeApp) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+                if (wholeApp) {
+                    suppressUntil = SystemClock.uptimeMillis() + LEAVE_GRACE_MS
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                } else {
+                    leaveShorts(pkg, attempt = 0)
+                }
             },
             onAllow = {
                 settings.allowUntil = System.currentTimeMillis() + OverlayController.ALLOW_MINUTES * 60_000L
             },
         )
+    }
+
+    /**
+     * 숏폼 화면을 벗어날 때까지 뒤로 가기를 누른다.
+     * 쇼츠를 여러 개 넘겨 본 뒤에는 뒤로 가기 한 번이 이전 쇼츠로만 돌아가기 때문이다.
+     * 너무 많이 눌러도 안 빠져나가면 홈 화면으로 보낸다.
+     */
+    private fun leaveShorts(pkg: String, attempt: Int) {
+        suppressUntil = SystemClock.uptimeMillis() + LEAVE_GRACE_MS
+        if (attempt >= MAX_BACK_PRESSES) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            return
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        handler.postDelayed({
+            val root = rootInActiveWindow
+            val stillInShorts = root != null &&
+                root.packageName?.toString() == pkg &&
+                ShortsDetector.isShortsScreen(pkg, root)
+            if (stillInShorts) leaveShorts(pkg, attempt + 1)
+        }, BACK_CHECK_DELAY_MS)
     }
 
     override fun onInterrupt() {}
@@ -186,6 +211,8 @@ class ShortsBlockerService : AccessibilityService() {
 
     companion object {
         private const val LEAVE_GRACE_MS = 1000L
+        private const val BACK_CHECK_DELAY_MS = 350L
+        private const val MAX_BACK_PRESSES = 15
         private const val SCROLL_SETTLE_MS = 300L
         private const val TRANSITION_SETTLE_MS = 400L
         private const val UNKNOWN_RETRY_MS = 150L
