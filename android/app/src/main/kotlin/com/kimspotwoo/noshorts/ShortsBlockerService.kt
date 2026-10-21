@@ -164,6 +164,7 @@ class ShortsBlockerService : AccessibilityService() {
 
     private fun showWarning(pkg: String) {
         overlay.showWarning(
+            extraConfirms = settings.extraConfirms,
             onLeave = {
                 suppressUntil = SystemClock.uptimeMillis() + LEAVE_GRACE_MS
                 val wholeApp = ShortsDetector.rules[pkg]?.wholeAppIsShortForm == true

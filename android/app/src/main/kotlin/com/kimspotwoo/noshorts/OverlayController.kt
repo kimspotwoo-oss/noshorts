@@ -29,6 +29,7 @@ class OverlayController(private val context: Context) {
     private val masks = mutableListOf<View>()
     private var shownMasks: List<Mask> = emptyList()
     private var warningView: View? = null
+    private var warningStepToken = 0
 
     val isWarningShowing get() = warningView != null
 
@@ -97,22 +98,63 @@ class OverlayController(private val context: Context) {
 
     /**
      * 화면 전체를 덮는 경고 화면을 띄운다.
-     * @param onLeave "돌아가기"를 눌렀을 때
-     * @param onAllow 대기 시간이 지난 뒤 "N분만 보기"를 눌렀을 때
+     * @param extraConfirms "N분만 보기"를 누른 뒤 한 번 더 띄울 확인 경고 수
+     * @param onLeave 어느 단계에서든 "돌아가기"를 눌렀을 때
+     * @param onAllow 마지막 단계에서 "보기"를 눌렀을 때
      */
-    @SuppressLint("SetTextI18n")
-    fun showWarning(onLeave: () -> Unit, onAllow: () -> Unit) {
+    fun showWarning(extraConfirms: Int, onLeave: () -> Unit, onAllow: () -> Unit) {
         if (warningView != null) return
         hideMasks()
 
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.argb(245, 20, 20, 20))
+            val pad = dp(32f).toInt()
+            setPadding(pad, pad, pad, pad)
+            isClickable = true // 아래 화면으로 터치가 새지 않게 한다.
+        }
+        val params = baseParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
+        windowManager.addView(root, params)
+        warningView = root
+        showWarningStep(root, step = 0, extraConfirms, onLeave, onAllow)
+    }
+
+    /**
+     * 경고 단계 하나를 그린다. 0단계는 첫 경고, 1단계부터는 추가 확인 경고다.
+     * 창은 그대로 두고 안의 내용만 바꿔서 깜빡이지 않게 한다.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun showWarningStep(
+        root: LinearLayout,
+        step: Int,
+        extraConfirms: Int,
+        onLeave: () -> Unit,
+        onAllow: () -> Unit,
+    ) {
+        root.removeAllViews()
+        val token = ++warningStepToken
+
+        val (titleText, subtitleText) = if (step == 0) {
+            "숏폼을 보려고 해요" to "지금 정말 보고 싶은 건가요?\n잠깐 멈추고 생각해봐요."
+        } else {
+            val message = if (step == extraConfirms && extraConfirms > 1) {
+                LAST_CONFIRM_MESSAGE
+            } else {
+                CONFIRM_MESSAGES[(step - 1) % CONFIRM_MESSAGES.size]
+            }
+            "정말 볼 건가요? ($step/$extraConfirms)" to message
+        }
+        val allowLabel = if (step == 0) "${ALLOW_MINUTES}분만 보기" else "그래도 볼래요"
+
         val title = TextView(context).apply {
-            text = "숏폼을 보려고 해요"
+            text = titleText
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
             gravity = Gravity.CENTER
         }
         val subtitle = TextView(context).apply {
-            text = "지금 정말 보고 싶은 건가요?\n잠깐 멈추고 생각해봐요."
+            text = subtitleText
             setTextColor(Color.argb(200, 255, 255, 255))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             gravity = Gravity.CENTER
@@ -128,42 +170,35 @@ class OverlayController(private val context: Context) {
         val allow = Button(context).apply {
             isEnabled = false
             setOnClickListener {
-                hideWarning()
-                onAllow()
+                if (step < extraConfirms) {
+                    showWarningStep(root, step + 1, extraConfirms, onLeave, onAllow)
+                } else {
+                    hideWarning()
+                    onAllow()
+                }
             }
         }
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.argb(245, 20, 20, 20))
-            val pad = dp(32f).toInt()
-            setPadding(pad, pad, pad, pad)
-            isClickable = true // 아래 화면으로 터치가 새지 않게 한다.
-            addView(title)
-            addView(subtitle)
-            addView(leave, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            addView(allow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        }
+        val fullWidth = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        root.addView(title)
+        root.addView(subtitle)
+        root.addView(leave, fullWidth)
+        root.addView(allow, LinearLayout.LayoutParams(fullWidth))
 
         // "보기" 버튼은 몇 초 기다려야 눌린다. 충동적으로 바로 넘어가지 않게 하는 장치.
         var remaining = ALLOW_DELAY_SECONDS
         val tick = object : Runnable {
             override fun run() {
-                if (warningView !== root) return
+                if (warningView !== root || warningStepToken != token) return
                 if (remaining > 0) {
-                    allow.text = "${ALLOW_MINUTES}분만 보기 (${remaining}초)"
+                    allow.text = "$allowLabel (${remaining}초)"
                     remaining--
                     handler.postDelayed(this, 1000)
                 } else {
-                    allow.text = "${ALLOW_MINUTES}분만 보기"
+                    allow.text = allowLabel
                     allow.isEnabled = true
                 }
             }
         }
-
-        val params = baseParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
-        windowManager.addView(root, params)
-        warningView = root
         tick.run()
     }
 
@@ -207,5 +242,14 @@ class OverlayController(private val context: Context) {
     companion object {
         const val ALLOW_MINUTES = 5
         const val ALLOW_DELAY_SECONDS = 5
+
+        /** 추가 확인 경고에 차례로 보여줄 문구. 횟수가 더 많으면 처음부터 다시 쓴다. */
+        private val CONFIRM_MESSAGES = listOf(
+            "5분이 50분이 되기 쉬워요.\n원래 하려던 일을 떠올려봐요.",
+            "지금까지 참은 게 아까워요.\n조금만 더 버텨봐요.",
+            "보고 나면 기분이 나아질까요?\n아니라면 돌아가요.",
+            "물 한 잔 마시고 와도 늦지 않아요.",
+        )
+        private const val LAST_CONFIRM_MESSAGE = "마지막으로 물어볼게요.\n정말 지금 봐야 하나요?"
     }
 }

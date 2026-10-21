@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,7 +11,13 @@ void main() {
   late List<MethodCall> calls;
 
   Future<void> pumpWithServiceEnabled(WidgetTester tester, bool enabled) async {
-    settings = {'maskEnabled': true, 'warningEnabled': true, 'allowUntil': 0};
+    settings = {
+      'maskEnabled': true,
+      'warningEnabled': true,
+      'extraConfirmEnabled': false,
+      'extraConfirmCount': 1,
+      'allowUntil': 0,
+    };
     calls = [];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
@@ -50,5 +57,31 @@ void main() {
     expect(call.arguments, {'warningEnabled': false});
     expect(settings['warningEnabled'], false);
     expect(settings['maskEnabled'], true);
+  });
+
+  testWidgets('추가 확인을 켜면 횟수를 조절할 수 있다', (tester) async {
+    await pumpWithServiceEnabled(tester, true);
+    expect(find.text('추가 확인 횟수'), findsNothing);
+
+    await tester.tap(find.text('보기 전에 한 번 더 확인하기'));
+    await tester.pumpAndSettle();
+    expect(settings['extraConfirmEnabled'], true);
+    expect(find.text('1번'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('늘리기'));
+    await tester.pumpAndSettle();
+    expect(calls.last.arguments, {'extraConfirmCount': 2});
+    expect(find.text('2번'), findsOneWidget);
+  });
+
+  testWidgets('경고 화면을 끄면 추가 확인은 바꿀 수 없다', (tester) async {
+    await pumpWithServiceEnabled(tester, true);
+    await tester.tap(find.text('들어가기 전에 경고하기'));
+    await tester.pumpAndSettle();
+
+    final tile = tester.widget<SwitchListTile>(
+      find.widgetWithText(SwitchListTile, '보기 전에 한 번 더 확인하기'),
+    );
+    expect(tile.onChanged, isNull);
   });
 }

@@ -43,10 +43,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _update({bool? maskEnabled, bool? warningEnabled}) async {
+  Future<void> _update({
+    bool? maskEnabled,
+    bool? warningEnabled,
+    bool? extraConfirmEnabled,
+    int? extraConfirmCount,
+  }) async {
     final settings = await BlockerChannel.setSettings(
       maskEnabled: maskEnabled,
       warningEnabled: warningEnabled,
+      extraConfirmEnabled: extraConfirmEnabled,
+      extraConfirmCount: extraConfirmCount,
     );
     if (mounted) setState(() => _settings = settings);
   }
@@ -95,6 +102,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               value: settings.warningEnabled,
               onChanged: (v) => _update(warningEnabled: v),
             ),
+            SwitchListTile(
+              title: const Text('보기 전에 한 번 더 확인하기'),
+              subtitle: const Text('"5분만 보기"를 누르면 확인 경고를 더 띄워요'),
+              value: settings.extraConfirmEnabled,
+              // 첫 경고 화면이 꺼져 있으면 추가 확인도 의미가 없다.
+              onChanged: settings.warningEnabled ? (v) => _update(extraConfirmEnabled: v) : null,
+            ),
+            if (settings.warningEnabled && settings.extraConfirmEnabled)
+              ListTile(
+                title: const Text('추가 확인 횟수'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: '줄이기',
+                      icon: const Icon(Icons.remove),
+                      onPressed: settings.extraConfirmCount > 1
+                          ? () => _update(extraConfirmCount: settings.extraConfirmCount - 1)
+                          : null,
+                    ),
+                    Text('${settings.extraConfirmCount}번', style: Theme.of(context).textTheme.titleMedium),
+                    IconButton(
+                      tooltip: '늘리기',
+                      icon: const Icon(Icons.add),
+                      onPressed: settings.extraConfirmCount < BlockerSettings.maxExtraConfirms
+                          ? () => _update(extraConfirmCount: settings.extraConfirmCount + 1)
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
             if (settings.allowUntil.isAfter(DateTime.now()))
               Padding(
                 padding: const EdgeInsets.only(top: 8),

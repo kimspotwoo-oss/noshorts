@@ -18,6 +18,8 @@ class MainActivity : FlutterActivity() {
                     val settings = BlockerSettings(this)
                     call.argument<Boolean>(BlockerSettings.KEY_MASK)?.let { settings.maskEnabled = it }
                     call.argument<Boolean>(BlockerSettings.KEY_WARNING)?.let { settings.warningEnabled = it }
+                    call.argument<Boolean>(BlockerSettings.KEY_EXTRA_CONFIRM)?.let { settings.extraConfirmEnabled = it }
+                    call.argument<Int>(BlockerSettings.KEY_EXTRA_CONFIRM_COUNT)?.let { settings.extraConfirmCount = it }
                     result.success(settings.toMap())
                 }
                 "openAccessibilitySettings" -> {
